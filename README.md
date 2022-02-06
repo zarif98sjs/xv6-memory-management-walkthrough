@@ -351,3 +351,11 @@ Returns `newsz` if succeeded, 0 otherwise.
 - [Memory Management in Xv6](https://www.cse.iitb.ac.in/~mythili/os/notes/old-xv6/xv6-memory.pdf)
 - [https://www.cs.virginia.edu/~cr4bd/4414/F2018/slides/20181011--slides-1up.pdf](https://www.cs.virginia.edu/~cr4bd/4414/F2018/slides/20181011--slides-1up.pdf)
 - [https://www.cs.virginia.edu/~cr4bd/4414/F2019/slides/20191015--slides-1up.pdf](https://www.cs.virginia.edu/~cr4bd/4414/F2019/slides/20191015--slides-1up.pdf)
+
+- [https://iitd-plos.github.io/os/2020/lec/l15.html](https://iitd-plos.github.io/os/2020/lec/l15.html)
+
+- [https://pdos.csail.mit.edu/6.828/2009/lec/l5.html](https://pdos.csail.mit.edu/6.828/2009/lec/l5.html)
+- [http://course.ece.cmu.edu/~ece447/s13/lib/exe/fetch.php?media=onur-447-spring13-lecture18-virtual-memory-iii-afterlecture.pdf](http://course.ece.cmu.edu/~ece447/s13/lib/exe/fetch.php?media=onur-447-spring13-lecture18-virtual-memory-iii-afterlecture.pdf)
+- [https://github.com/YehudaShapira/xv6-explained](https://github.com/YehudaShapira/xv6-explained)
+- [https://stackoverflow.com/questions/56258056/what-does-deallocation-function-in-xv6s-allocation-function](https://stackoverflow.com/questions/56258056/what-does-deallocation-function-in-xv6s-allocation-function)
+- [https://www.cs.columbia.edu/~junfeng/11sp-w4118/lectures/mem.pdf](https://www.cs.columbia.edu/~junfeng/11sp-w4118/lectures/mem.pdf)
