@@ -330,10 +330,19 @@ the physical address of every page of the parent using a call to `walkpgdir`
     - `setupkvm`  : Set up kernel part of a page table
     - `inituvm` : allocates one physical page of memory, copies the `init` executable into that memory, and sets up a page table entry for the first page of the user virtual address space
     - When the `init` process runs, it executes the `init` executable, whose main function **forks** a shell and starts listening to the user
+
+  I guess this explain why we get this output when we do `control + P` after xv6 boots
+
+  ```cpp
+  1 sleep  init 80104347 801043f5 80104f5d 80106051 80105d93
+  2 sleep  sh 80104310 801002ea 80101030 801050b6 80104f5d 80106051 80105d93
+  ```
+
 - all other case (meaning for all other user processes)
     - created by the `fork` system call
         - calls `copyuvm` : memory image is setup as a complete copy of the parent’s memory image. it return the child’s page table
         - after `copyuvm` entire memory of the parent has been cloned for the child, and the child’s new page table points to its newly allocated physical memory
+
 # **`Grow/shrink the userspace part of the memory image`**
 
 - sbrk → sys_sbrk [SYSTEM CALL]
