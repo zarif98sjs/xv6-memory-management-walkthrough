@@ -301,13 +301,23 @@ Returns `newsz` if succeeded, 0 otherwise.
     Case 2: `mappages` function failed. This function is responsible of making the **new allocated page to be accessible by the process** who uses the given page directory by **mapping that page with the next virtual address available in the page directory**. If this function fails that means it failed in doing so, probably due to the page directory being already full.
     
     In both cases, `allocuvm` didn't managed to increase the user's memory to the size requested, Therefore, `deallocuvm` is undoing all allocations until the point of failure, so the virtual memory will remain unchanged, and returns an error it self.
-    
+
+## **`deallocuvm`**
+deallocuvm looks at all the logical pages from the (bigger) old size of the process to the (smaller) new size, locates the corresponding physical pages, frees them up, and zeroes out the corresponding PTE as well.
+
+
+## **`copyuvm`**
+Once a child process is allocated, its memory image is setup as a complete copy of the parent’s memory image by a call to `copyuvm`
+
+- `setupkvm` : sets up kernel virtual memory
+- walks through the entire address space of the parent in page-sized chunks, gets
+the physical address of every page of the parent using a call to `walkpgdir`
+- allocates a new physical page for the child using `kalloc`
+- copies the contents of the parent’s page into the child’s page, **adds an entry to the child’s page table** using `mappages`
+- returns the child’s page table
+- has similar failure cases as discussed in `allocuvm`
 
 <!-- ## `inituvm`
-
-## `copyuvm`
-
-## `deallocuvm`
 
 ## `exec` -->
 <!-- ![Untitled](xv6%20memory%20management%20walkthrough%2052f10c25c9dd4de39e601e386e6a1788/Untitled%206.png) -->
@@ -319,20 +329,11 @@ Returns `newsz` if succeeded, 0 otherwise.
 - `userinit(void)` → creates the first user process known as `init`
     - `setupkvm`  : Set up kernel part of a page table
     - `inituvm` : allocates one physical page of memory, copies the `init` executable into that memory, and sets up a page table entry for the first page of the user virtual address space
-    - When the init process runs, it executes the init executable, whose main function forks a shell and starts listening to the user
-- all other case
+    - When the `init` process runs, it executes the `init` executable, whose main function **forks** a shell and starts listening to the user
+- all other case (meaning for all other user processes)
     - created by the `fork` system call
-        - calls `copyuvm` : memory image is setup as a complete copy of the parent’s memory image
-            - `setupkvm`
-            - walks through the entire address space of the parent in page-sized chunks, gets
-            the physical address of every page of the parent using a call to `walkpgdir`
-            - allocates a new physical page for the child using `kalloc`
-            - copies the contents of the parent’s page into the child’s page, **adds an entry to the child’s page table** using `mappages`
-            - returns the child’s page table
-        
-        At this point, the entire memory of the parent has been cloned for the child, and the child’s new page table points to its newly allocated physical memory
-        
-
+        - calls `copyuvm` : memory image is setup as a complete copy of the parent’s memory image. it return the child’s page table
+        - after `copyuvm` entire memory of the parent has been cloned for the child, and the child’s new page table points to its newly allocated physical memory
 # **`Grow/shrink the userspace part of the memory image`**
 
 - sbrk → sys_sbrk [SYSTEM CALL]
