@@ -1,6 +1,15 @@
 # 📑 **`Xv6 Memory Management Walkthrough`**
 
-**[This is still under construction]**
+# **`Table of Content`**
+
+- [Terminology](#terminology)
+- [Overview of page table](#overview-of-page-table)
+- [Memory Layout](#memory-layout)
+- [Functions of interest {Part 1 : building blocks}](#functions-of-interest-part-1--building-blocks)
+- [Functions of interest {Part 2 : core functions}](#functions-of-interest-part-2--core-functions)
+- [How all of this works](#how-all-of-this-works)
+- [Final Words](#final-words)
+- [Acknowledgement](#resource)
 
 # **`Terminology`**
 
@@ -12,17 +21,29 @@
 - PTE : Page Table Entry
 - PPN : Physical Page Number
 
-# **`Overview of page table`**
+# **`Overview of xv6 page table`**
 
 All process works on virtual address. Machine’s RAM is physical address. Page Table maps virtual address to physical address. 
 
-Xv6 does this in 2 steps.
+Xv6 does this in 2 steps. 
 
 ![Untitled](xv6%20memory%20management%20walkthrough%2052f10c25c9dd4de39e601e386e6a1788/Untitled.png)
 
+Some things to note for xv6 :
+- 32 bit virtual address (so, virtual address space 4GB)
+- page size of 4KB
+- The CPU register `CR3` contains **a pointer to the outer page directory** of the **current running process**.
+
 ![Untitled](xv6%20memory%20management%20walkthrough%2052f10c25c9dd4de39e601e386e6a1788/Untitled%201.png)
 
+### **Caution**
+
+xv6 **does not** do **demand paging**, so there is **no concept of virtual memory**. That is, all valid pages of a process are always allocated physical pages.
+
+
 # **`Memory Layout`**
+
+Every page table in xv6 has mappings for user pages as well as kernel pages. The part of the page table dealing with kernel pages is the same across all processes.
 
 ## **Kernel Only Memory**
 
@@ -324,7 +345,7 @@ the physical address of every page of the parent using a call to `walkpgdir`
 
 <!-- ## `sbrk` -->
 
-# **`User Process Memory Management initialization`**
+<!-- # **`User Process Memory Management initialization`**
 
 - `userinit(void)` → creates the first user process known as `init`
     - `setupkvm`  : Set up kernel part of a page table
@@ -341,19 +362,361 @@ the physical address of every page of the parent using a call to `walkpgdir`
 - all other case (meaning for all other user processes)
     - created by the `fork` system call
         - calls `copyuvm` : memory image is setup as a complete copy of the parent’s memory image. it return the child’s page table
-        - after `copyuvm` entire memory of the parent has been cloned for the child, and the child’s new page table points to its newly allocated physical memory
+        - after `copyuvm` entire memory of the parent has been cloned for the child, and the child’s new page table points to its newly allocated physical memory -->
 
-# **`Grow/shrink the userspace part of the memory image`**
+<!-- # **`Grow/shrink the userspace part of the memory image`**
 
 - sbrk → sys_sbrk [SYSTEM CALL]
     - growproc
         - allocuvm : to grow
         - deallocuvm : to shrink
-        - switchuvm
+        - switchuvm -->
 
 <!-- # running executable (`exec`) -->
 
+# **`How all of this works`**
 
+Now that we are done with the function basics, let’s focus on how things actually work. Most of the findings and intuition gained are from a shit ton of debug statements and by reading a few books and notes. So, take it with a grain of salt.
+
+&nbsp;
+
+The first user process is the `init` function. It is initiated by `userinit` inside `main` of `main.c`.
+
+Let’s focus on this first.
+
+## **`init`**
+
+### **`userinit` function**
+
+```cpp
+//PAGEBREAK: 32
+// Set up first user process.
+void
+userinit(void)
+{
+  struct proc *p;
+  extern char _binary_initcode_start[], _binary_initcode_size[];
+
+  p = allocproc();
+  
+  initproc = p;
+  if((p->pgdir = setupkvm()) == 0)
+    panic("userinit: out of memory?");
+  inituvm(p->pgdir, _binary_initcode_start, (int)_binary_initcode_size);
+  p->sz = PGSIZE;
+  memset(p->tf, 0, sizeof(*p->tf));
+  p->tf->cs = (SEG_UCODE << 3) | DPL_USER;
+  p->tf->ds = (SEG_UDATA << 3) | DPL_USER;
+  p->tf->es = p->tf->ds;
+  p->tf->ss = p->tf->ds;
+  p->tf->eflags = FL_IF;
+  p->tf->esp = PGSIZE;
+  p->tf->eip = 0;  // beginning of initcode.S
+
+  safestrcpy(p->name, "initcode", sizeof(p->name));
+  p->cwd = namei("/");
+
+  // this assignment to p->state lets other cores
+  // run this process. the acquire forces the above
+  // writes to be visible, and the lock is also needed
+  // because the assignment might not be atomic.
+  acquire(&ptable.lock);
+
+  p->state = RUNNABLE;
+
+  release(&ptable.lock);
+}
+```
+
+Now let’s see what things are done step by step
+
+- `allocproc` : for every process `pid` needs to be assigned, `proc` structure needs to be initialized. all of this is done here. for the `init` process `pid` is returned 1 by `allocproc`
+    - `kalloc` : `allocproc` calls `kalloc` which sets up **data** on the **kernel stack**
+- `setupkvm` : creates **kernel page table** of this `init` process
+- `inituvm` : allocates **one page** of physical memory, copies the **init executable** into that memory, sets up a page table entry (PTE) for the first page of the user virtual address space.
+    
+    Let’s also keep track of how many pages are being allocated where, this will be key to our understanding when we want to find what which pages are being deallocated in `deallocuvm` in later part.
+    
+    ```cpp
+    PAGE ALLOCATED HERE = 1
+    ```
+    
+
+### **`init executable`**
+
+now the **init executable** that has been loaded runs, which to my understanding points to this part inside code
+
+![Untitled](How%20all%20of%20this%20works%207868ca41311a42b5ba45aa4e1b1033fd/Untitled.png)
+
+### **`exec`**
+
+`SYS_exec` in turn calls `exec` . The `exec` function looks like this -
+
+```cpp
+int
+exec(char *path, char **argv)
+{
+  char *s, *last;
+  int i, off;
+  uint argc, sz, sp, ustack[3+MAXARG+1];
+  struct elfhdr elf;
+  struct inode *ip;
+  struct proghdr ph;
+  pde_t *pgdir, *oldpgdir;
+  struct proc *curproc = myproc();
+  
+  begin_op();
+
+  if((ip = namei(path)) == 0){
+    end_op();
+    cprintf("exec: fail\n");
+    return -1;
+  }
+  ilock(ip);
+  pgdir = 0;
+
+  // Check ELF header
+  if(readi(ip, (char*)&elf, 0, sizeof(elf)) != sizeof(elf))
+    goto bad;
+  if(elf.magic != ELF_MAGIC)
+    goto bad;
+
+  if((pgdir = setupkvm()) == 0)
+    goto bad;
+
+  // Load program into memory.
+  sz = 0;
+  for(i=0, off=elf.phoff; i<elf.phnum; i++, off+=sizeof(ph)){
+    if(readi(ip, (char*)&ph, off, sizeof(ph)) != sizeof(ph))
+      goto bad;
+    if(ph.type != ELF_PROG_LOAD)
+      continue;
+    if(ph.memsz < ph.filesz)
+      goto bad;
+    if(ph.vaddr + ph.memsz < ph.vaddr)
+      goto bad;
+    if((sz = allocuvm(pgdir, sz, ph.vaddr + ph.memsz)) == 0)
+      goto bad;
+    if(ph.vaddr % PGSIZE != 0)
+      goto bad;
+    if(loaduvm(pgdir, (char*)ph.vaddr, ip, ph.off, ph.filesz) < 0)
+      goto bad;
+  }
+  iunlockput(ip);
+  end_op();
+  ip = 0;
+
+  // Allocate two pages at the next page boundary.
+  // Make the first inaccessible.  Use the second as the user stack.
+  sz = PGROUNDUP(sz);
+  if((sz = allocuvm(pgdir, sz, sz + 2*PGSIZE)) == 0)
+    goto bad;
+ 
+  clearpteu(pgdir, (char*)(sz - 2*PGSIZE));
+  sp = sz;
+
+  // Push argument strings, prepare rest of stack in ustack.
+  for(argc = 0; argv[argc]; argc++) {
+    if(argc >= MAXARG)
+      goto bad;
+    sp = (sp - (strlen(argv[argc]) + 1)) & ~3;
+    if(copyout(pgdir, sp, argv[argc], strlen(argv[argc]) + 1) < 0)
+      goto bad;
+    ustack[3+argc] = sp;
+  }
+  ustack[3+argc] = 0;
+
+  ustack[0] = 0xffffffff;  // fake return PC
+  ustack[1] = argc;
+  ustack[2] = sp - (argc+1)*4;  // argv pointer
+
+  sp -= (3+argc+1) * 4;
+  if(copyout(pgdir, sp, ustack, (3+argc+1)*4) < 0)
+    goto bad;
+
+  // Save program name for debugging.
+  for(last=s=path; *s; s++)
+    if(*s == '/')
+      last = s+1;
+  safestrcpy(curproc->name, last, sizeof(curproc->name));
+
+  // Commit to the user image.
+  oldpgdir = curproc->pgdir;
+  curproc->pgdir = pgdir;
+  curproc->sz = sz;
+  curproc->tf->eip = elf.entry;  // main
+  curproc->tf->esp = sp;
+
+  switchuvm(curproc);
+
+  freevm(oldpgdir);
+
+  return 0;
+
+ bad:
+  if(pgdir)
+    freevm(pgdir);
+  if(ip){
+    iunlockput(ip);
+    end_op();
+  }
+  return -1;
+}
+```
+
+- `setupkvm` : The thing that I understood so far is that, the 1 page allocated inside `inituvm` is responsible for executing this exec function. **Whatever this exec function now wants to execute**, will be in a separate new kernel page table, hence a `setupkvm` is called once more. (what I exactly mean here will be more clear when I talk about other user processes)
+- `allocuvm` : allocates pages for the executable it wants to run, here 1 page is sufficient for `init`
+    
+    ```cpp
+    PAGE ALLOCATED HERE = 1
+    ```
+    
+- `loaduvm` : loads the executable from disk into the newly allocated pages in `allocuvm`
+- `allocuvm` : the new memory image so far only has executable **code and data**, now we also need **stack** space. Rather than allocating 1 page for the stack, it allocates 2. The 2nd one is the actual stack, 1st one serves as a guard page. This is the only page in the user’s memory which is marked as present but not user-accessible (`PTE_U` is cleared)
+    
+    ***Reason for having a guard page :*** To guard a stack growing oﬀ the stack page, xv6 places a guard page right below the stack. As the guard page is not mapped, if the stack runs oﬀ the stack page, the **hardware** will generate an **exception** because it cannot translate the faulting address.
+    
+    Strings containing the **command-line arguments**, as well as an **array of pointers** to them, are at the very top of the stack
+    
+    ![Untitled](How%20all%20of%20this%20works%207868ca41311a42b5ba45aa4e1b1033fd/Untitled%201.png)
+    
+    ```cpp
+    PAGE ALLOCATED HERE = 2
+    ```
+    
+- **trap frame update** : It is important to note that exec **does not replace/reallocate** the kernel stack. The exec system call only replaces the **user part of the memory image**, and does nothing to the kernel part. And if you think about it, there is no way the process can replace the kernel stack, because the process is executing in kernel mode on the kernel stack itself, and has important information like the trap frame stored on it.
+    
+    Recall that a process that makes the exec system call has moved into kernel mode to service
+    the software interrupt of the system call. Normally, when the process moves back to user mode again (**by popping the trap frame on the kernel stack**), it is expected to return to the instruction after the system call. However, in the case of exec, the process doesn’t have to return to the instruction after exec when it gets the CPU next, but instead must start executing the new executable it just loaded from disk. So, the code in exec changes the return address in the trap frame to point to the entry address of the binary. It also sets the stack pointer in the trap frame to point to the top of the newly created user stack.
+    
+    ```cpp
+    curproc->tf->eip = elf.entry;  // main
+    curproc->tf->esp = sp;
+    ```
+    
+- `switchuvm` : Finally, once all these operations succeed, `exec` **switches page tables** to start using the new memory image. That is, it writes the address of the new page table into the CR3 register, so that it can start accessing the new memory image when it goes back to userspace.
+- `freevm` : the process that called exec i.e. `init` , was still using the old memory image. we free the old memory image that it was pointing to after updating
+    - `deallocuvm` : The pages that are deleted here are the pages that were created in `inituvm` . So,
+        
+        ```cpp
+        PAGE DEALLOCATED HERE = 1
+        ```
+        
+
+The new memory image created by exec looks like this
+
+![Untitled](How%20all%20of%20this%20works%207868ca41311a42b5ba45aa4e1b1033fd/Untitled%202.png)
+
+At this point, the process that called `exec` can start executing on the new memory image
+when it returns from trap
+
+**Note** : exec waits until the end to do this switch of page tables, because if anything went wrong in the system call, exec returns from trap into the old memory image and prints out an error
+
+## `sh`
+
+Apart from `init`, all other processes are created by the fork system call. When the `init` process runs, it executes the **init executable**, whose main function forks a shell (`sh`) and starts listening to the user
+
+### `fork`
+
+- `allocproc` : returns `pid = 2` for `sh`
+- `copyuvm` : once a child process is allocated, its memory image is setup as a complete copy of the parent’s memory. This is done using `copyuvm` .
+    - `setupkvm` : inside copyuvm, a new kernel page table is created, and parent memory is allocated here.
+    
+    Recall that 3 pages were created in `exec` of `init` . These 3 pages are copied here
+    
+    ```cpp
+    PAGES ALLOCATED HERE = 3
+    ```
+    
+
+### `exec`
+
+The description of exec for shell is the same as discussed for `init` . So lets just find out how many pages are allocated where
+
+- `setupkvm`
+- `allocuvm`
+    
+    The executable that `sh` wants to run needs more memory than `init` needed. So 2 pages are allocated here.
+    
+    ```cpp
+    PAGES ALLOCATED HERE = 2
+    ```
+    
+- `loaduvm`
+- `allocuvm`
+- `freevm`
+    - `deallocuvm` The pages that were allocated (copied) using `copyuvm` are deallocated as they are pointing to old page directory
+        
+        ```cpp
+        PAGE DEALLOCATED HERE = 3
+        ```
+        
+
+Now let’s look at a general user process. Every other user process will fork `sh` . Let’s look at `echo`
+
+## `echo`
+
+### `fork`
+
+- `allocproc`
+- `copyuvm` : here 4 page will be copied (2 + 2 pages that were allocated inside `sh` exec)
+    
+    ```cpp
+    PAGE ALLOCATED HERE = 4
+    ```
+    
+
+### `growproc`
+
+After fork, `growproc` is called to grow userspace memory image. `growproc` can be called by the `sbrk` system call. It basically increases the heap size
+
+```cpp
+PAGE ALLOCATED HERE = 8
+```
+
+### `exec`
+
+- `allocuvm`
+    
+    ```cpp
+    PAGE ALLOCATED HERE = 1
+    ```
+    
+- `loaduvm`
+- `allocuvm`
+    
+    ```cpp
+    PAGE ALLOCATED HERE = 2
+    ```
+    
+- `freevm`
+    - `deallocuvm` : 4+8 pages deleted of old memory image
+        
+        ```cpp
+        PAGE DEALLOCATED HERE = 12
+        ```
+        
+
+### `exit`
+
+- `freevm`
+    - `deallocuvm` : 1+2 pages deleted of new memory image
+        
+        ```cpp
+        PAGE DEALLOCATED HERE = 3
+        ```
+
+Finally, an overview of all the things said in a picture - because ofcourse a picture speaks more than a thousand words!        
+
+![Untitled](How%20all%20of%20this%20works%207868ca41311a42b5ba45aa4e1b1033fd/Untitled%203.png)
+
+---
+
+# **`Final Words`**
+
+Thanks for reading this far ! I am not sure how much helpful this has been for you, but I hope you can start navigating the memory management part of the xv6 codebase after reading this. Go through this writeup multiple times if you don't undersand anything and if you have some more time to spare, please go through [this](https://www.cse.iitb.ac.in/~mythili/os/notes/old-xv6/xv6-memory.pdf) doc. A lot of the part of this writeup has been taken or inspired from this.
+
+May the force be with you so that you survive this offline! 
 
 # **`Resource`**
 
