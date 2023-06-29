@@ -716,7 +716,10 @@ Finally, an overview of all the things said in a picture - because ofcourse a pi
 
 Thanks for reading this far ! I am not sure how much helpful this has been for you, but I hope you can start navigating the memory management part of the xv6 codebase after reading this. Go through this writeup multiple times if you don't undersand anything and if you have some more time to spare, please go through [this](https://www.cse.iitb.ac.in/~mythili/os/notes/old-xv6/xv6-memory.pdf) doc. A lot of the part of this writeup has been taken or inspired from this.
 
-May the force be with you so that you survive this offline! 
+May the force be with you! ***And if you liked the write-up, you can support me by buying me a cup of coffee!***
+<p align="center">
+<a href="https://www.buymeacoffee.com/zarif98sjs" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
+</p> 
 
 # **`Resource`**
 
